@@ -19,7 +19,6 @@ library(dplyr)
 ## Problem 1 ‐ Abalone Data
 
 a.  Import the data into a `data.frame` in R. Use the information in the “abalone.names” file to give appropriate column names. (Note: Downloading and unzipping the file can take place outside of your submitted document, but importing the file should be in the submission.)
-
 ```{r}
 # get column names
 raw_abalone_text <- read_lines("abalone/abalone.names")
@@ -34,69 +33,66 @@ head(abalone)
 ```
 
 b.  The data contains information on three different sexes of abalone. Report the number of observations belonging to each sex.
-
 ```{r}
 table(abalone$Sex)
 ```
+Answer: The dataset contains 1,528 males, 1,307 females, and 1,342 infants. 
 
-c.  Use the data to answer the following questions:
-
-<!-- -->
+c. Use the data to answer the following questions:
 
 1.  Which weight has the highest correlation with rings?
-
 ```{r}
 weight_vars <- c("WholeWeight", "ShuckedWeight", "VisceraWeight", "ShellWeight")
 cors <- sapply(abalone[weight_vars], function(x) cor(x, abalone$Rings))
 cors
 which.max(cors)
 ```
+Answer: ShellWeight has the highest correlation with rings (~0.628).
 
 2.  For that weight, which sex has the highest correlation?
-
 ```{r}
 best_weight <- names(which.max(cors))
 abalone %>%
   group_by(Sex) %>%
   summarise(correlation = cor(.data[[best_weight]], Rings))
 ```
+Answer: Infants have the highest correlation (0.725).
+
 
 3.  What are the weights of the abalone with the most rings?\
-
 ```{r}
 max_rings <- max(abalone$Rings)
 abalone %>%
   filter(Rings == max_rings) %>%
   select(Sex, all_of(weight_vars), Rings)
 ```
+Answer: The abalone with the most rings (29) is female with weights Whole=1.81, Shucked=0.706, Viscera=0.322, Shell=0.475.
+
 
 4.  What percentage of abalones have a viscera weight larger than their shell weight?
-
 ```{r}
 mean(abalone$VisceraWeight > abalone$ShellWeight) * 100
 ```
+Answer: About 6.5% of abalones have viscera weight larger than shell weight.
 
 d.  Create a table of correlations between weights and rings, within each sex. The columns should be the four weights, and the rows should be the sexes. (This table does not need to be “fancy” but should clearly identify what each value represents.)
-
 ```{r}
 abalone %>%
   group_by(Sex) %>%
   summarise(across(c(WholeWeight, ShuckedWeight, VisceraWeight, ShellWeight),
                    ~cor(Rings, .)))
 ```
+Answer: Correlations vary by sex, with infants generally showing stronger relationships than males or females.
 
 e.  Carry out a series of t‐tests to examine whether the number of rings differs across the three sexes. Present the R output and interpret the results. (You may use an existing R function to carry out the t‐test, or for minor extra credit, manually write your own calculation of the t‐test p‐values.)
-
 ```{r}
 pairwise.t.test(abalone$Rings, abalone$Sex)
 ```
+Answer: The differences in ring counts between sexes are statistically significant (p < 0.001 for most comparisons).
 
 ## Problem 2 ‐ Food Expenditure Data
 
-Please download this dataset. It is from a survey of food expenditures. The respondents were asked to record all the money they spent on food in a given week and then report it. We’re going to do some data cleaning to prepare it for an analysis.
-
 a.  Import the data into a `data.frame` in R. As with the abalone data, you may download the data outside of your submission, but importation should take place inside the problem set submission.
-
 ```{r}
 # import food expenditure data
 foodexp <- read_csv("food_expenditure.csv")
@@ -105,7 +101,6 @@ head(foodexp)
 ```
 
 b.  Clean up the variable names. Simplify them.
-
 ```{r}
 # inspect original variable names
 colnames(foodexp)
@@ -115,9 +110,6 @@ foodexp <- foodexp %>%
   janitor::clean_names()
 
 # simplify further
-
-library(dplyr)
-
 foodexp <- foodexp %>%
   rename(
     age              = what_is_your_age,
@@ -139,7 +131,6 @@ colnames(foodexp)
 ```
 
 c.  Restrict the data to those paying in US dollars (USD). Show that it worked by confirming the number of observations before and after restricting the data.
-
 ```{r}
 # count observations before filtering
 n_before <- nrow(foodexp)
@@ -155,11 +146,11 @@ cat("Observations before filtering:", n_before, "\n")
 cat("Observations after filtering (USD only):", n_after, "\n")
 unique(foodexp_usd$currency)
 ```
+Answer: 262 observations were in the dataset before filtering, and 230 remained after restricting to USD.
 
 There are a number of issues with this data, likely due to the self‐reported nature. For each of the following variables, clean them by removing any row with inappropriate data. For each variable, explain your rules for eliminating rows. For example, for the age variable, you might state “Excluded all minors under the age of 18”. (Note that there is no “right” answer here, the goal is to i) choose reasonable rules and ii) carry out the corresponding code.)
 
 d.  The variable related to age.
-
 ```{r}
 # exclude minors (<18) and implausibly old ages (>115)
 foodexp_usd <- foodexp_usd %>%
@@ -199,10 +190,10 @@ foodexp_usd <- foodexp_usd %>%
 ```
 
 h.  Report your final number of observations after this cleaning.
-
 ```{r}
 cat("Final number of observations after cleaning:", nrow(foodexp_usd))
 ```
+Answer: After all cleaning, 82 observations remained.
 
 ## Problem 3 ‐ Collatz conjecture
 
@@ -232,6 +223,20 @@ a.  Write function `nextCollatz` that given a positive integer, computes the nex
     Demonstrate it works by reproducing the examples.
 
 ```{r}
+#' Compute the next number in the Collatz sequence
+#'
+#' Given a positive integer n, this function returns the next number
+#' in its Collatz sequence:
+#'   - If n is even, the result is n / 2
+#'   - If n is odd, the result is 3n + 1
+#'
+#' @param n A positive integer
+#'
+#' @return A positive integer, the next value in the Collatz sequence
+#'
+#' @examples
+#' nextCollatz(5)   # returns 16
+#' nextCollatz(16)  # returns 8
 nextCollatz <- function(n) {
   if (!is.numeric(n) || n <= 0) {
     stop("Input must be a positive integer.")
@@ -243,6 +248,7 @@ nextCollatz <- function(n) {
     3 * n + 1
   }
 }
+
 
 # examples
 nextCollatz(5)   # 16
@@ -264,22 +270,35 @@ b.  Create a function `collatzSequence` that returns the Collatz sequence for a 
     Demonstrate it works by reproducing the examples.
 
     ```{r}
-    collatzSequence <- function(n) {
-      if (!is.numeric(n) || n <= 0) {
-        stop("Input must be a positive integer.")
-      }
-      
-      seq_vals <- n
-      while (tail(seq_vals, 1) != 1) {
-        seq_vals <- c(seq_vals, nextCollatz(tail(seq_vals, 1)))
-      }
-      
-      seq_vals
-    }
+#' Generate a Collatz sequence
+#'
+#' Given a positive integer n, this function computes the full Collatz sequence
+#' starting at n and ending at 1. The sequence is generated using the
+#' `nextCollatz` function iteratively.
+#'
+#' @param n A positive integer
+#'
+#' @return A numeric vector containing the full Collatz sequence from n to 1
+#'
+#' @examples
+#' collatzSequence(5)   # returns c(5, 16, 8, 4, 2, 1)
+#' collatzSequence(19)  # returns c(19, 58, 29, 88, 44, 22, 11, ..., 1)
+collatzSequence <- function(n) {
+  if (!is.numeric(n) || n <= 0) {
+    stop("Input must be a positive integer.")
+  }
+  
+  seq_vals <- n
+  while (tail(seq_vals, 1) != 1) {
+    seq_vals <- c(seq_vals, nextCollatz(tail(seq_vals, 1)))
+  }
+  
+  seq_vals
+}
 
-    # examples
-    collatzSequence(5)   # 5 16 8 4 2 1
-    collatzSequence(19)  # 19 58 29 88 44 22 11 ...
+# examples
+collatzSequence(5)   # 5 16 8 4 2 1
+collatzSequence(19)  # 19 58 29 88 44 22 11 ...
     ```
 
 c.  Use these functions to find the shortest and longest Collatz sequence starting with values between 100 and 500, inclusive. In the case of ties, report the lowest starting value.
