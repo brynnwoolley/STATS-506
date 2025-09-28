@@ -12,9 +12,12 @@ editor: visual
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(message = FALSE, warning = FALSE)
 
-library(readr)
 library(dplyr)
-library(microbenchmark)
+library(readr)
+library(ggplot2)
+library(tidyr)
+library(stringr)
+library(broom)
 ```
 
 ## Problem 1 - Modified Random walk
@@ -173,9 +176,7 @@ print(bench_100k)
 
 ```
 
-**Discussion:**
-
-The benchmarking results show that the **vectorized implementation is the fastest**. For 1,000 steps, the vectorized method ran about 10 times faster than the loop and more than 10 times faster than the apply method. For 100,000 steps, the vectorized method was about 15 times faster than the loop and roughly 25 times faster than apply. The loop implementation performed reasonably well but was consistently slower than vectorized. The apply implementation was the slowest due to the overhead of repeated function calls.
+**Discussion:** The benchmarking results show that the **vectorized implementation is the fastest**. For 1,000 steps, the vectorized method ran about 10 times faster than the loop and more than 10 times faster than the apply method. For 100,000 steps, the vectorized method was about 15 times faster than the loop and roughly 25 times faster than apply. The loop implementation performed reasonably well but was consistently slower than vectorized. The apply implementation was the slowest due to the overhead of repeated function calls.
 
 In summary:
 
@@ -204,11 +205,21 @@ prob_10   <- simulate_prob_zero(10)
 prob_100  <- simulate_prob_zero(100)
 prob_1000 <- simulate_prob_zero(1000)
 
-prob_10
-prob_100
-prob_1000
-
+# Printing all three Monte Carlo probs properly
+cat(
+  "P(end=0 | n=10)  =", prob_10,  "\n",
+  "P(end=0 | n=100) =", prob_100, "\n",
+  "P(end=0 | n=1000)=", prob_1000, "\n"
+)
 ```
+
+The Monte Carlo simulation estimates the probability of ending at 0 as follows:
+
+-   10 steps: \~13%
+-   100 steps: \~2%
+-   1,000 steps: \~0.6%
+
+These results show that the probability decreases as the number of steps increases. With only 10 steps, there is still a reasonable chance of returning exactly to 0. By 100 steps, the chance has dropped to about 2%. By 1,000 steps, the probability is extremely small (less than 1%). This matches the intuition that as the walk grows longer, the random variability accumulates and the chance of ending exactly at 0 becomes increasingly small.
 
 ## Problem 2 - Mean of Mixture of Distributions
 
@@ -225,6 +236,41 @@ Accomplish this without using any loops.
 
 (Hint: This can be done with extremely minimal code.)
 
+```{r}
+set.seed(123)
+
+simulate_cars_daily <- function(sims=100000) {
+  
+  # set hours
+  hours <- 0:23
+  
+  rush_idx <- hours %in% c(8, 17)
+  
+  # poisson means/hour
+  lam <- rep(NA_real_, 24)
+  lam[hours %in% 0:7]   <- 1
+  lam[hours %in% 9:16]  <- 8
+  lam[hours %in% 18:23] <- 12
+  lam[rush_idx] <- NA_real_
+  
+  # draws
+    pois_mat <- sapply(lam, function(l) if (is.na(l)) rep(0, sims) else rpois(sims, l))
+    
+      rush_mat <- matrix(0, nrow = sims, ncol = 24)
+  rush_mat[, rush_idx] <- replicate(sum(rush_idx), rnorm(sims, mean = 60, sd = sqrt(12)))
+
+  
+      rowSums(pois_mat + rush_mat)
+
+}
+# estimate expected daily count
+daily_totals <- simulate_cars_daily(100000)
+mean_daily <- mean(daily_totals)
+sd_daily   <- sd(daily_totals)
+
+mean_daily; sd_daily
+```
+
 ## Problem 3 - Linear Regression
 
 Use the following code to download the YouTube Superbowl commercials data:
@@ -238,6 +284,26 @@ Information about this data can be found at https://github.com/rfordatascience/t
 1.  Often in data analysis, we need to de-identify it. This is more important for studies of people, but let’s carry it out here. Remove any column that might uniquely identify a commercial. This includes but isn’t limited to things like brand, any URLs, the YouTube channel, or when it was published.
 
 Report the dimensions of the data after removing these columns.\
+
+```{r}
+youtube <- read.csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-03-02/youtube.csv')
+
+id_like_cols <- c(
+  "brand","channel","title","description",
+  "super_bowl_ads_dot_com_url","superbowl_ads_dot_com_url",
+  "youtube_url","video_url","thumbnail",
+  "id","video_id","embed","brand_url","brand_website","channel_url",
+  "published_at","publishedAt","published"
+)
+
+keep <- setdiff(names(youtube), intersect(names(youtube), id_like_cols))
+yt_deid <- youtube %>% dplyr::select(all_of(keep))
+
+# report rows x cols
+dim(yt_deid)
+
+```
+
 2. For each of the following variables, examine their distribution. Determine whether i) The variable could be used as is as the outcome in a linear regression model, ii) The variable can use a transformation prior to being used as the outcome in a linear regression model, or iii) The variable would not be appropriate to use as the outcome in a linear regression model.\
 For each variable, report which category it falls in. If it requires a transformation, carry such a transformation out and use that transformation going forward.
 
@@ -250,10 +316,87 @@ For each variable, report which category it falls in. If it requires a transform
 ```
 
 (Hint: At least the majority of these variables are appropriate to use.)\
+
+
+```{r}
+count_vars <- c("view_count","like_count","dislike_count","favorite_count","comment_count")
+avail <- intersect(count_vars, names(yt_deid))
+
+# Flag constants (e.g., favorite_count often all zeros)
+const_vars <- avail[sapply(avail, function(v) dplyr::n_distinct(yt_deid[[v]], na.rm = TRUE) <= 1)]
+usable     <- setdiff(avail, const_vars)
+
+# Create log1p outcomes for usable variables
+for (v in usable) {
+  yt_deid[[paste0("log1p_", v)]] <- log1p(yt_deid[[v]])
+}
+
+list(usable_outcomes = usable, dropped_as_constant = const_vars)
+
+
+```
+
 3. For each variable in part b. that are appropriate, fit a linear regression model predicting them based upon each of the seven binary flags for characteristics of the ads, such as whether it is funny. Control for year as a continuous covariate.
 
 Discuss the results. Identify the direction of any statistically significant results.\
-4. Consider only the outcome of view counts. Calculate (\hat{\beta}) manually (without using `lm`) by first creating a proper design matrix, then using matrix algebra to estimate (\beta). Confirm that you get the same result as `lm` did in part c. ------------------------------------------------------------------------
+
+```{r}
+
+flag_names <- c("funny","show_product_quickly","patriotic","celebrity","danger","animals","use_sex")
+flags_in   <- intersect(flag_names, names(yt_deid))
+
+if ("year" %in% names(yt_deid)) yt_deid$year <- as.numeric(yt_deid$year)
+
+outcomes_tr <- paste0("log1p_", usable)
+
+mods <- lapply(outcomes_tr, function(y) {
+  form <- as.formula(paste(y, "~ year +", paste(flags_in, collapse = " + ")))
+  lm(form, data = yt_deid)
+})
+names(mods) <- outcomes_tr
+
+model_summary <- purrr::map_df(names(mods), ~ broom::tidy(mods[[.x]]) %>% dplyr::mutate(outcome = .x)) %>%
+  dplyr::filter(term != "(Intercept)") %>%
+  dplyr::arrange(outcome, p.value) %>%
+  dplyr::select(outcome, term, estimate, std.error, statistic, p.value)
+
+model_summary
+
+```
+
+4. Consider only the outcome of view counts. Calculate $\hat{\beta}$ manually (without using `lm`) by first creating a proper design matrix, then using matrix algebra to estimate $\beta$. Confirm that you get the same result as `lm` did in part c.
+
+```{r}
+yvar <- "log1p_view_count"
+stopifnot(yvar %in% names(yt_deid))
+
+vars_needed <- c(yvar, "year", flags_in)
+dat_fit <- yt_deid %>% dplyr::select(all_of(vars_needed)) %>% tidyr::drop_na()
+
+X <- model.matrix(~ year + ., data = dat_fit %>% dplyr::select(-all_of(yvar)))
+y <- dat_fit[[yvar]]
+
+# OLS via (X'X)^{-1} X'y
+beta_manual <- solve(t(X) %*% X, t(X) %*% y)
+
+# Compare to lm fit using the same X
+fit_lm <- lm(y ~ X - 1)   # X already contains intercept
+coef_lm <- coef(fit_lm)
+
+manual_vs_lm <- data.frame(
+  term = colnames(X),
+  beta_manual = as.numeric(beta_manual),
+  beta_lm     = as.numeric(coef_lm),
+  diff        = as.numeric(beta_manual - coef_lm)
+)
+
+manual_vs_lm
+```
+
+For the regression models of `log1p(view_count)`, `log1p(like_count)`, `log1p(dislike_count)`, and `log1p(comment_count)`, the **year variable** showed a consistent **positive and statistically significant effect** for views, likes, and dislikes, indicating engagement has increased over time. None of the seven ad characteristic flags (funny, celebrity, animals, danger, use_sex, patriotic, show_product_quickly) were significant at the 0.05 level. For comments, no predictors reached significance, though year and patriotic were borderline positive effects. Overall, year is the only variable with a clear and consistent association with engagement outcomes.
+
+
+------------------------------------------------------------------------
 
 ## GitHub Link
 
