@@ -1,0 +1,304 @@
+---
+title: "Problem Set 5"
+author: "Brynn Woolley"
+format:
+  pdf:
+    include-in-header:
+      text: |
+        \usepackage{amsmath}
+editor: visual
+code-fold: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+
+```
+
+## Problem 1 - OOP Programming
+
+Create a class to represent Wald-style normal approximation Confidence Intervals. Do this using S4.
+
+1.  For the `waldCI` class, define the following:
+
+    1.  A constructor, which takes in a confidence level (0,1) and either a mean and standard error, or a lower and upper bound. This should be a custom constructor, not `new()` or `waldCI()`.\
+    2.  A validator.\
+    3.  A `show` method.\
+    4.  Accessors: `lb`, `ub`, `mean`, `sterr`, `level`.\
+    5.  Setters: `lb`, `ub`, `mean`, `sterr`, `level`. Be sure to validate the resulting `waldCI`.\
+    6.  A `contains` method, returning a logical of whether a value is within a CI.\
+    7.  An `overlap` method, that takes in two `waldCI`’s, and returns a logical of whether the two confidence intervals overlap.\
+    8.  `as.numeric` to return `c(lb, ub)`. (Hint: The second argument of `setGeneric` is not needed when an existing s3 function uses the `.Primitive` function.)\
+    9.  `transformCI` which takes in a `function` and a `waldCI`, and returns the transformed `waldCI` object. Warn the user that only monotonic functions make sense.\
+
+```{r}
+## define "waldCI" class
+setClass(
+  "waldCI",
+  slots = list(
+    lb = "numeric",       # lower bound
+    ub = "numeric",       # upper bound
+    mean = "numeric",     # mean
+    sterr = "numeric",    # standard error
+    level = "numeric"     # confidence level
+  ),
+  prototype = list(
+    lb = NA_real_,
+    ub = NA_real_,
+    mean = NA_real_,
+    sterr = NA_real_,
+    level = NA_real_
+  ),
+  
+  # validity rules
+  validity = function(object) {
+    if (!is.na(object@sterr) && object@sterr <= 0)
+      return("Standard error must be positive.")
+    
+    if (length(object@level) != 1 || object@level <= 0 || object@level >= 1)
+      return("Level must be in (0,1).")
+
+    if (!is.na(object@lb) && !is.na(object@ub) && object@lb > object@ub)
+      return("lb cannot exceed ub.")
+
+    if (any(!is.finite(c(object@lb, object@ub, object@mean, object@sterr)), na.rm = TRUE))
+      return("Non-finite values are not allowed.")
+
+    TRUE
+  }
+)
+
+## constructor
+waldCI_create <- function(level, mean=NA, sterr=NA, lb=NA, ub=NA) {
+  # if bounds are missing, compute them from mean & sterr
+  if (is.na(lb) || is.na(ub)) {
+    # Valid only if both mean and sterr are provided
+    if (is.na(mean) || is.na(sterr))
+      stop("Provide either (lb, ub) OR (mean, sterr).")
+    
+    # z multiplier for the confidence level.
+    z <- qnorm(1 - (1 - level) / 2)
+
+    lb <- mean - z * sterr
+    ub <- mean + z * sterr
+  } else {
+    # If lb and ub are provided, compute mean and sterr from those
+    mean  <- (lb + ub) / 2
+    sterr <- (ub - mean) / qnorm(1 - (1 - level) / 2)
+  }
+
+  # create the object, validator runs automatically
+  new("waldCI", lb = lb, ub = ub, mean = mean, sterr = sterr, level = level)
+}
+
+## define how a waldCI object prints.
+setMethod("show", "waldCI", function(object) {
+  cat("Wald CI:\n")
+  cat(sprintf("  Level: %.3f\n", object@level))
+  cat(sprintf("  Mean: %.4f\n", object@mean))
+  cat(sprintf("  StdErr: %.4f\n", object@sterr))
+  cat(sprintf("  CI: (%.4f, %.4f)\n", object@lb, object@ub))
+})
+
+## accessors
+# generic accessors give clean external API.
+setGeneric("lb",    function(x) standardGeneric("lb"))
+setGeneric("ub",    function(x) standardGeneric("ub"))
+setGeneric("mean",  function(x) standardGeneric("mean"))
+setGeneric("sterr", function(x) standardGeneric("sterr"))
+setGeneric("level", function(x) standardGeneric("level"))
+
+# methods that simply return the corresponding slot.
+setMethod("lb",    "waldCI", function(x) x@lb)
+setMethod("ub",    "waldCI", function(x) x@ub)
+setMethod("mean",  "waldCI", function(x) x@mean)
+setMethod("sterr", "waldCI", function(x) x@sterr)
+setMethod("level", "waldCI", function(x) x@level)
+
+## setters
+setGeneric("lb<-", function(x, value) standardGeneric("lb<-"))
+setGeneric("ub<-", function(x, value) standardGeneric("ub<-"))
+setGeneric("mean<-", function(x, value) standardGeneric("mean<-"))
+setGeneric("sterr<-", function(x, value) standardGeneric("sterr<-"))
+setGeneric("level<-", function(x, value) standardGeneric("level<-"))
+
+# updating slots triggers validation each time.
+
+setReplaceMethod("lb", "waldCI", function(x, value) {
+  x@lb <- value
+  validObject(x)
+  x
+})
+
+setReplaceMethod("ub", "waldCI", function(x, value) {
+  x@ub <- value
+  validObject(x)
+  x
+})
+
+setReplaceMethod("mean", "waldCI", function(x, value) {
+  x@mean <- value
+  validObject(x)
+  x
+})
+
+setReplaceMethod("sterr", "waldCI", function(x, value) {
+  x@sterr <- value
+  validObject(x)
+  x
+})
+
+setReplaceMethod("level", "waldCI", function(x, value) {
+  x@level <- value
+  validObject(x)
+  x
+})
+
+## contains(): check if value lies inside CI
+setGeneric("contains", function(ci, value) standardGeneric("contains"))
+
+setMethod("contains", c("waldCI", "numeric"),
+  function(ci, value) {
+    # TRUE if value lies between lb and ub inclusive
+    value >= ci@lb & value <= ci@ub
+  }
+)
+
+## overlap(): check if two CIs intersect
+setGeneric("overlap", function(ci1, ci2) standardGeneric("overlap"))
+
+setMethod("overlap", c("waldCI", "waldCI"),
+  function(ci1, ci2) {
+    # overlap occurs when ranges intersect at all
+    ci1@lb <= ci2@ub && ci2@lb <= ci1@ub
+  }
+)
+
+## as.numeric(): return c(lb, ub)
+setMethod("as.numeric", "waldCI",
+  function(x) c(x@lb, x@ub)
+)
+
+## transformCI(): apply function to CI endpoints
+setGeneric("transformCI", function(ci, f) standardGeneric("transformCI"))
+
+setMethod("transformCI", c("waldCI", "function"),
+  function(ci, f) {
+
+    # warn because valid results require monotonic function
+    warning("Only monotonic functions produce valid transformed CIs.")
+
+    new_lb <- f(ci@lb)
+    new_ub <- f(ci@ub)
+
+    # if function is decreasing, swap values
+    if (new_lb > new_ub) {
+      tmp <- new_lb
+      new_lb <- new_ub
+      new_ub <- tmp
+    }
+
+    # rebuild CI using transformed bounds
+    waldCI_create(level = ci@level, lb = new_lb, ub = new_ub)
+  }
+)
+
+```
+
+2.  Use your `waldCI` class to create three objects:
+
+    -   `ci1`: (17.2, 24.7), 95%\
+    -   `ci2`: mean: 13, standard error: 2.5, 99%\
+    -   `ci3`: (27.43, 39.22), 75%
+```{r}
+## ci1: bounds given, level = 0.95
+ci1 <- waldCI_create(level = 0.95, lb = 17.2, ub = 24.7)
+
+## ci2: mean & sterr given, level = 0.99
+ci2 <- waldCI_create(level = 0.99, mean = 13, sterr = 2.5)
+
+## ci3: bounds given, level = 0.75
+ci3 <- waldCI_create(level = 0.75, lb = 27.43, ub = 39.22)
+```
+    Evaluate the following code:
+
+```{r}
+   ci1
+   ci2
+   ci3
+   as.numeric(ci1)
+   as.numeric(ci2)
+   as.numeric(ci3)
+   lb(ci2)
+   ub(ci2)
+   mean(ci1)
+   sterr(ci3)
+   level(ci2)
+   lb(ci2) <- 10.5
+   mean(ci3) <- 34
+   level(ci3) <- .8
+   contains(ci1, 17)
+   contains(ci3, 44)
+   overlap(ci1, ci2)
+   eci1 <- transformCI(ci1, sqrt)
+   eci1
+   mean(transformCI(ci2, log))
+```
+
+3.  Show that your validator does not allow the creation of invalid confidence intervals:
+
+-   negative standard error\
+-   lb \> ub\
+-   Infinite bounds\
+-   invalid use of the setters
+
+(Infinite confidence bounds are of course not truly invalid, but we’re just going to ignore them for this case.)
+
+```{r}
+# negative standard error
+waldCI_create(level = 0.95, mean = 10, sterr = -2)
+```
+
+```{r}
+# lb > ub
+waldCI_create(level = 0.95, lb = 10, ub = 5)
+```
+
+```{r}
+# infinite bounds
+waldCI_create(level = 0.95, lb = -Inf, ub = Inf)
+```
+
+```{r}
+# invalid use of the setters
+ci <- waldCI_create(level = 0.95, mean = 10, sterr = 1)
+lb(ci) <- 20
+```
+
+Note that there are a lot of choices to be made here. What are you going to store in the class? How are you going to store them (what object types)? How are you going to enforce the function in `transform` being monotonic?
+
+There is no right answer to those questions. Make the best decision you can, and don’t be afraid to change it if your decision causes unforeseen difficulties.
+
+You may not use any existing R functions or packages that would trivialize this assignment. (E.g. if you found an existing package that does this, or found a function that checks for overlap between two CIs, that is not able to be used.)
+
+## Problem 3 - plotly
+
+Repeat \[problem set 4, question 3\] using plotly.
+
+There is no expectation that you produce the exact same plots as last time. You may of course use your plots as last time, or the ones from the problem set 4 solutions, as inspiration for these plots.
+
+These will be graded similar to last time:
+
+1.  Is the type of graph & choice of variables appropriate to answer the question?\
+
+2.  Is the graph clear and easy to interpret?\
+
+3.  
+
+    ## Is the graph publication ready?
+
+## GitHub Link
+
+-   Repo: <https://github.com/brynnwoolley/STATS-506#>
+
+------------------------------------------------------------------------
