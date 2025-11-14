@@ -3,16 +3,26 @@ title: "Problem Set 5"
 author: "Brynn Woolley"
 format:
   pdf:
+    prefer-html: true
     include-in-header:
       text: |
         \usepackage{amsmath}
+        \usepackage{fvextra}
+        % Fix wrapping for console output
+        \DefineVerbatimEnvironment{Verbatim}{Verbatim}{breaklines=true,breakanywhere=true}
+    code-block-border-left: true
+    code-block-wrap: true
 editor: visual
 code-fold: true
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(message = FALSE, warning = FALSE)
-
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, error = TRUE)
+library(tidyverse)
+library(plotly)
+library(knitr)
+library(webshot2)
+library(htmlwidgets)
 ```
 
 ## Problem 1 - OOP Programming
@@ -52,17 +62,18 @@ setClass(
   
   # validity rules
   validity = function(object) {
+    
     if (!is.na(object@sterr) && object@sterr <= 0)
-      return("Standard error must be positive.")
+      return("\nStandard error must be positive.")
+    
+    if (!is.na(object@lb) && !is.na(object@ub) && object@lb > object@ub)
+      return("\nlb cannot exceed ub.")
     
     if (length(object@level) != 1 || object@level <= 0 || object@level >= 1)
-      return("Level must be in (0,1).")
-
-    if (!is.na(object@lb) && !is.na(object@ub) && object@lb > object@ub)
-      return("lb cannot exceed ub.")
+      return("\nLevel must be in (0,1).")
 
     if (any(!is.finite(c(object@lb, object@ub, object@mean, object@sterr)), na.rm = TRUE))
-      return("Non-finite values are not allowed.")
+      return("\nNon-finite values are not allowed.")
 
     TRUE
   }
@@ -70,11 +81,17 @@ setClass(
 
 ## constructor
 waldCI_create <- function(level, mean=NA, sterr=NA, lb=NA, ub=NA) {
+  ## ---------- Early check for (lb, ub) ----------
+  if (!is.na(lb) && !is.na(ub)) {
+    if (lb > ub)
+      stop("\nlb cannot exceed ub.")
+  }
+
   # if bounds are missing, compute them from mean & sterr
   if (is.na(lb) || is.na(ub)) {
     # Valid only if both mean and sterr are provided
     if (is.na(mean) || is.na(sterr))
-      stop("Provide either (lb, ub) OR (mean, sterr).")
+      stop("\nProvide either (lb, ub) OR (mean, sterr).")
     
     # z multiplier for the confidence level.
     z <- qnorm(1 - (1 - level) / 2)
@@ -210,16 +227,18 @@ setMethod("transformCI", c("waldCI", "function"),
     -   `ci1`: (17.2, 24.7), 95%\
     -   `ci2`: mean: 13, standard error: 2.5, 99%\
     -   `ci3`: (27.43, 39.22), 75%
-```{r}
-## ci1: bounds given, level = 0.95
-ci1 <- waldCI_create(level = 0.95, lb = 17.2, ub = 24.7)
 
-## ci2: mean & sterr given, level = 0.99
-ci2 <- waldCI_create(level = 0.99, mean = 13, sterr = 2.5)
+    ```{r}
+    ## ci1: bounds given, level = 0.95
+    ci1 <- waldCI_create(level = 0.95, lb = 17.2, ub = 24.7)
 
-## ci3: bounds given, level = 0.75
-ci3 <- waldCI_create(level = 0.75, lb = 27.43, ub = 39.22)
-```
+    ## ci2: mean & sterr given, level = 0.99
+    ci2 <- waldCI_create(level = 0.99, mean = 13, sterr = 2.5)
+
+    ## ci3: bounds given, level = 0.75
+    ci3 <- waldCI_create(level = 0.75, lb = 27.43, ub = 39.22)
+    ```
+
     Evaluate the following code:
 
 ```{r}
@@ -281,6 +300,12 @@ There is no right answer to those questions. Make the best decision you can, and
 
 You may not use any existing R functions or packages that would trivialize this assignment. (E.g. if you found an existing package that does this, or found a function that checks for overlap between two CIs, that is not able to be used.)
 
+**What are you going to store in the class?** I store all five components explicitly: the lower bound, upper bound, mean, standard error, and confidence level. Storing everything avoids recomputation and makes accessor and setter methods straightforward.
+
+**How are you going to store them (what object types)?** Each component is stored as a `numeric` slot. All are length-1 numeric values.
+
+**How are you going to enforce the function in `transform` being monotonic?** I cannot guarantee monotonicity automatically, so I warn the user that the function must be monotonic. After applying the function to both endpoints, I check whether the transformed values reverse order; if they do, I swap them so the resulting CI remains valid.
+
 ## Problem 3 - plotly
 
 Repeat \[problem set 4, question 3\] using plotly.
@@ -293,9 +318,297 @@ These will be graded similar to last time:
 
 2.  Is the graph clear and easy to interpret?\
 
-3.  
+3.  Is the graph publication ready?
 
-    ## Is the graph publication ready?
+Use the NYTimes Covid data ([https://raw.githubusercontent.com/nytimes/covid-19-data/refs/heads/master/rolling-averages/us-states.csv](https://raw.githubusercontent.com/nytimes/covid-19-data/refs/heads/master/rolling-averages/us.csv)).
+
+This lists daily Covid new cases. For each of the following, produce a publication-ready plot which addresses the question. Use your plot to support an argument for your question.
+
+a.  *How many major and minor spikes in cases were there?*
+
+```{r}
+# load data
+covid_states <- read_csv(
+  "https://raw.githubusercontent.com/nytimes/covid-19-data/refs/heads/master/rolling-averages/us-states.csv"
+)
+
+# aggregate by date
+covid_us <- covid_states %>%
+  group_by(date) %>%
+  summarise(cases_avg = sum(cases_avg, na.rm = TRUE))
+
+# look for peaks
+covid_us <- covid_us %>%
+  arrange(date) %>%
+  mutate(
+    prev_avg = lag(cases_avg),
+    next_avg = lead(cases_avg),
+    is_peak = cases_avg > prev_avg & cases_avg > next_avg
+  )
+
+# extract peaks and classify by relative size
+peaks <- covid_us %>%
+  filter(is_peak) %>%
+  mutate(
+    peak_type = case_when(
+      cases_avg >= quantile(cases_avg, 0.75, na.rm = TRUE) ~ "Major",
+      TRUE ~ "Minor"
+    )
+  ) %>%
+  arrange(desc(cases_avg))
+
+peaks %>%
+  count(peak_type)
+
+top_peaks <- peaks %>%
+  filter(peak_type == "Major") %>%
+  slice_max(cases_avg, n = 3)
+
+# plot
+p1 <- plot_ly() %>%
+  add_lines(
+    data = covid_us,
+    x = ~date,
+    y = ~cases_avg,
+    name = "Cases (7-day avg)",
+    line = list(width = 0.6, color = "gray")
+  ) %>%
+  add_markers(
+    data = peaks,
+    x = ~date,
+    y = ~cases_avg,
+    color = ~peak_type,
+    colors = c("Major" = "firebrick", "Minor" = "steelblue"),
+    marker = list(size = 6),
+    name = "Peaks"
+  ) %>%
+  layout(
+    title = list(
+      text = "Major and Minor COVID-19 Case Spikes in the U.S.",
+      x = 0.5,
+      y = 0.99
+    ),
+    xaxis = list(
+    title = "Date",
+    tickformat = "%b %Y",
+    tickfont = list(size = 10),
+    title_standoff = 20
+    ),
+    yaxis = list(
+      title = "7-Day Rolling Average (log scale)",
+      type = "log"
+    ),
+    legend = list(
+      orientation = "h",
+      yanchor = "top",
+      y = -0.05   # much closer to the plot
+    ),
+    margin = list(t = 40)
+  )
+# save static version for PDF
+plotly::export(p1, file = "p1.png")
+```
+
+The figure shows several distinct spikes in U.S. COVID-19 case data between 2020 and 2023. We see major peaks occur in December 2020, January 2021, and January 2022. Smaller waves appeared throughout mid-2021 and late 2022. The log scale highlights both large and moderate increases while preserving proportional differences.
+
+b.  *For the states with the highest and lowest overall rates per population, what differences do you see in their trajectories over time?*
+
+```{r}
+# identify states with highest & lowest rates
+state_rates <- covid_states %>%
+  group_by(state) %>%
+  summarise(
+    mean_cases_per_100k = mean(cases_avg_per_100k, na.rm = TRUE)
+  ) %>%
+  arrange(desc(mean_cases_per_100k))
+
+# extract top and bottom states
+top_state <- slice_max(state_rates, mean_cases_per_100k, n = 1)
+bottom_state <- slice_min(state_rates, mean_cases_per_100k, n = 1)
+
+
+top_state$state
+bottom_state$state
+
+# plot
+p2 <- plot_ly(
+  data = covid_states %>% 
+    filter(state %in% c(top_state$state, bottom_state$state)),
+  x = ~date,
+  y = ~cases_avg_per_100k,
+  color = ~state,
+  colors = "Set1",
+  type = "scatter",
+  mode = "lines",
+  line = list(width = 1)
+) %>%
+  layout(
+    title = list(
+      text = "COVID-19 Rates: Highest vs. Lowest States",
+      x = 0.5
+    ),
+    xaxis = list(
+      title = "Date",
+      tickformat = "%b\n%Y"
+    ),
+    yaxis = list(
+      title = "Cases per 100K (7-day avg)"
+    ),
+    legend = list(
+      orientation = "h",
+      yanchor = "top",
+      y = -0.05   # much closer to the plot
+    ),
+    margin = list(t = 40)
+  )
+# save static version for PDF
+plotly::export(p2, file = "p2.png")
+```
+The state with the highest rate (American Samoa) shows sharp, isolated peaks concentrated in early 2022, reflecting intense but brief outbreaks.
+
+The state with the lowest rate (Maryland), by contrast, maintained a much flatter trajectory throughout the pandemic, with smaller fluctuations and lower sustained case rates.
+
+This highlights how outbreak intensity and timing varied dramatically even after population adjustment.
+
+c.  Identify, to the best of your ability without a formal test, the first five states to experience Covid in a substantial way.
+
+```{r}
+## explore data to inform threshold (c) and consecutive days (k)
+
+# examine distribution of daily rates
+summary_stats <- covid_states %>%
+  summarise(
+    min = min(cases_avg_per_100k, na.rm = TRUE),
+    q25 = quantile(cases_avg_per_100k, 0.25, na.rm = TRUE),
+    median = median(cases_avg_per_100k, na.rm = TRUE),
+    mean = mean(cases_avg_per_100k, na.rm = TRUE),
+    q75 = quantile(cases_avg_per_100k, 0.75, na.rm = TRUE),
+    p90 = quantile(cases_avg_per_100k, 0.9, na.rm = TRUE),
+    p95 = quantile(cases_avg_per_100k, 0.95, na.rm = TRUE),
+    max = max(cases_avg_per_100k, na.rm = TRUE)
+  )
+summary_stats
+
+# assess persistence of small vs large values
+covid_states %>%
+  group_by(state) %>%
+  mutate(over_1 = cases_avg_per_100k > 1,
+         run_id = with(rle(over_1), rep(seq_along(lengths), lengths)),
+         run_len = ave(over_1, run_id, FUN = length)) %>%
+  ungroup() %>%
+  filter(over_1) %>%
+  summarise(mean_run = mean(run_len), median_run = median(run_len), max_run = max(run_len))
+
+# visualize early trajectories
+# exploratory plot of early states
+p3 <- plot_ly(
+  data = covid_states %>% 
+    filter(state %in% c("Washington", "California", "New York", "Florida")),
+  x = ~date,
+  y = ~cases_avg_per_100k,
+  color = ~state,
+  type = "scatter",
+  mode = "lines"
+) %>%
+  layout(
+    title = "Early COVID-19 Trajectories in Key States",
+    xaxis = list(
+      # use Date or character, NOT as.numeric(...)
+      range = c(as.Date("2020-02-01"), as.Date("2020-06-01")),
+      # or: range = c("2020-02-01", "2020-06-01"),
+      title = "Date"
+    ),
+    yaxis = list(
+      range = c(0, 20),
+      title = "Cases per 100K (7-day avg)"
+    ),
+    legend = list(
+      orientation = "h",
+      yanchor = "top",
+      y = -0.05   # much closer to the plot
+    ),
+    margin = list(t = 40)
+  )
+
+# save static version for PDF
+plotly::export(p3, file = "p3.png")
+
+# quantify baseline noise (pre-March 2020)
+baseline_sd <- covid_states %>%
+  filter(date < as.Date("2020-03-01")) %>%
+  summarise(sd_base = sd(cases_avg_per_100k, na.rm = TRUE))
+baseline_sd
+```
+
+The exploratory plot shows that early-hit states such as Washington, California, and New York begin sustained increases above about 1 case per 100K in late February and early March. Before this point, all states exhibit near-zero, non-persistent noise. Visually, the transition above 1 per 100K represents the first clear signal of community spread. These increases persist for several days, suggesting that a requirement of three consecutive days filters out noise effectively.
+
+```{r}
+# threshold and persistence
+# apply rule to identify first states
+c <- 1
+k <- 3
+#' Identify first date of sustained COVID activity
+#' @param df State-level data frame
+#' @param c Threshold for cases_avg_per_100k
+#' @param k Minimum consecutive days
+#' @return Tibble with first_date
+
+first_sustained <- function(df, c, k) {
+  df <- dplyr::arrange(df, date)
+  over <- df$cases_avg_per_100k > c
+  r <- rle(over)
+  run_id <- rep(seq_along(r$lengths), r$lengths)
+  run_len <- ave(over, run_id, FUN = length)
+  hit <- over & (run_len >= k)
+  if (!any(hit, na.rm = TRUE)) return(dplyr::tibble(first_date = as.Date(NA)))
+  dplyr::tibble(first_date = min(df$date[hit], na.rm = TRUE))
+}
+
+first_dates <- covid_states %>%
+  group_by(state) %>%
+  group_modify(~ first_sustained(.x, c = c, k = k)) %>%
+  ungroup() %>%
+  arrange(first_date)
+
+first_five <- slice_head(first_dates, n = 5)
+
+first_five %>%
+  knitr::kable(
+    col.names = c("State", "First Substantial Case Date"),
+    caption = sprintf(
+      "First five states by rule: cases_avg_per_100k > %s for %s consecutive days.",
+      c, k
+    )
+  )
+
+# plot
+p4 <- plot_ly(
+  data = covid_states %>% filter(state %in% first_five$state),
+  x = ~date,
+  y = ~cases_avg_per_100k,
+  color = ~state,
+  type = "scatter",
+  mode = "lines",
+  line = list(width = 1)
+) %>%
+  layout(
+    title = sprintf(
+      "Earliest Substantial COVID Activity by State<br><sub>Rule: > %.1f cases per 100K for %d consecutive days</sub>",
+      c, k
+    ),
+    xaxis = list(title = "Date", tickformat = "%b\n%Y"),
+    yaxis = list(title = "Cases per 100K (7-day avg)"),
+    legend = list(
+      orientation = "h",
+      yanchor = "top",
+      y = -0.05   # much closer to the plot
+    ),
+    margin = list(t = 40)
+  )
+# save static version for PDF
+plotly::export(p4, file = "p4.png")
+```
+Applying the rule of >1 case per 100K for at least 3 consecutive days identifies the five earliest states to experience substantial COVID activity. The final plot shows that these states all exhibit clear, early upward trajectories consistent with the threshold. This supports the rule derived from the exploratory visualization and confirms that these states were the earliest to experience meaningful spread.
 
 ## GitHub Link
 
