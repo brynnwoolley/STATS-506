@@ -210,16 +210,18 @@ setMethod("transformCI", c("waldCI", "function"),
     -   `ci1`: (17.2, 24.7), 95%\
     -   `ci2`: mean: 13, standard error: 2.5, 99%\
     -   `ci3`: (27.43, 39.22), 75%
-```{r}
-## ci1: bounds given, level = 0.95
-ci1 <- waldCI_create(level = 0.95, lb = 17.2, ub = 24.7)
 
-## ci2: mean & sterr given, level = 0.99
-ci2 <- waldCI_create(level = 0.99, mean = 13, sterr = 2.5)
+    ```{r}
+    ## ci1: bounds given, level = 0.95
+    ci1 <- waldCI_create(level = 0.95, lb = 17.2, ub = 24.7)
 
-## ci3: bounds given, level = 0.75
-ci3 <- waldCI_create(level = 0.75, lb = 27.43, ub = 39.22)
-```
+    ## ci2: mean & sterr given, level = 0.99
+    ci2 <- waldCI_create(level = 0.99, mean = 13, sterr = 2.5)
+
+    ## ci3: bounds given, level = 0.75
+    ci3 <- waldCI_create(level = 0.75, lb = 27.43, ub = 39.22)
+    ```
+
     Evaluate the following code:
 
 ```{r}

@@ -1,0 +1,43 @@
+---
+title: "Term Project-Data Cleaning"
+author: "Brynn Woolley"
+format:
+  pdf:
+    include-in-header:
+      text: |
+        \usepackage{amsmath}
+editor: visual
+code-fold: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+
+```
+
+## Heading 1
+
+```{r}
+# load dataset
+data("nzge", package = "nzelect")
+
+# summarize total votes per election year and voting type
+vote_summary <- nzge %>%
+  group_by(election_year, voting_type) %>%
+  summarize(total_votes = sum(votes, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(total_votes))
+
+# print nicely
+vote_summary %>%
+  knitr::kable(col.names = c("Election Year", "Voting Type", "Total Votes"),
+               caption = "Total Votes by Year and Type")
+
+```
+
+------------------------------------------------------------------------
+
+## GitHub Link
+
+-   Repo: <https://github.com/brynnwoolley/STATS-506#>
+
+------------------------------------------------------------------------
