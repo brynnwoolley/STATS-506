@@ -1,0 +1,381 @@
+---
+title: "Term Project-Analysis"
+author: "Brynn Woolley"
+format:
+  pdf:
+    include-in-header:
+      text: |
+        \usepackage{amsmath}
+editor: visual
+code-fold: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+
+```
+
+## 1. Setup and Load Data
+
+```{r}
+library(tidyverse)
+library(sf)
+library(lubridate)
+library(here)
+library(MASS)      # negative binomial
+library(janitor)
+library(patchwork)
+
+set.seed(506)
+```
+
+
+```{r}
+## Load cleaned datasets
+collisions_york_2023_sf <- readRDS(
+  here::here("Term Project", "Data", "collisions_york_2023_sf.rds")
+)
+
+collisions_york_multi_sf <- readRDS(
+  here::here("Term Project", "Data", "collisions_york_2020_2024_sf.rds")
+)
+
+## Sanity checks
+nrow(collisions_york_2023_sf)
+nrow(collisions_york_multi_sf)
+
+range(collisions_york_multi_sf$date)
+```
+
+## 2. Spatial and Temporal Aggregation
+
+### 2.1 Construct Hex Grid
+```{r}
+## Create bounding box
+york_bbox <- st_bbox(collisions_york_multi_sf)
+
+
+## Create hex grid (~2km spacing)
+hex_grid <- st_make_grid(
+  st_as_sfc(york_bbox),
+  cellsize = 2000,
+  square = FALSE
+) %>%
+  st_sf(hex_id = seq_along(.), geometry = .)
+
+
+## Keep only hexes that intersect any crash (multi-year)
+hex_grid <- hex_grid[
+  st_intersects(hex_grid, collisions_york_multi_sf, sparse = FALSE) %>%
+    apply(1, any),
+]
+
+## Quick check
+nrow(hex_grid)
+```
+Hexagon size was selected to balance spatial resolution with sufficient crash counts per spatial unit, yielding 74 hexes across the City of York.
+
+### 2.2 Aggregate to hex by month
+```{r}
+## ---- hex-month-aggregation ----
+
+aggregate_hex_month <- function(collisions_sf, hex_grid) {
+
+  ## Add month variable
+  collisions_sf <- collisions_sf %>%
+    mutate(month = floor_date(date, "month"))
+
+  ## Define full month sequence for this dataset
+  all_months <- seq(
+    from = min(collisions_sf$month),
+    to   = max(collisions_sf$month),
+    by   = "month"
+  )
+
+  ## Spatial join to hex grid
+  collisions_hex <- collisions_sf %>%
+    st_join(hex_grid) %>%
+    filter(!is.na(hex_id))
+
+  ## Aggregate to hex × month and balance panel
+  hex_month_counts <- collisions_hex %>%
+    st_drop_geometry() %>%
+    count(hex_id, month, name = "crash_count") %>%
+    complete(
+      hex_id,
+      month = all_months,
+      fill = list(crash_count = 0)
+    ) %>%
+    arrange(hex_id, month) %>%
+    mutate(
+      days_in_month = days_in_month(month),
+      log_days = log(days_in_month)
+    )
+
+  list(
+    hex_month = hex_month_counts,
+    collisions_hex = collisions_hex
+  )
+}
+
+## Aggregate 2023 data
+agg_2023 <- aggregate_hex_month(
+  collisions_sf = collisions_york_2023_sf,
+  hex_grid = hex_grid
+)
+
+hex_month_2023 <- agg_2023$hex_month
+collisions_hex_2023 <- agg_2023$collisions_hex
+
+## Aggregate multi-year data
+agg_multi <- aggregate_hex_month(
+  collisions_sf = collisions_york_multi_sf,
+  hex_grid = hex_grid
+)
+
+hex_month_multi <- agg_multi$hex_month
+collisions_hex_multi <- agg_multi$collisions_hex
+```
+
+
+
+## 3. Negative Binomial Models
+```{r}
+## ---- model-helpers ----
+
+## Modal road category by hex-month
+make_road_covs <- function(collisions_hex_df) {
+  collisions_hex_df %>%
+    st_drop_geometry() %>%
+    filter(!is.na(road_cat)) %>%
+    group_by(hex_id, month) %>%
+    summarise(
+      road_cat = names(sort(table(road_cat), decreasing = TRUE))[1],
+      .groups = "drop"
+    )
+}
+
+## Environmental indicators by hex-month (handle NA weather_bin safely)
+make_env_covs <- function(collisions_hex_df) {
+  collisions_hex_df %>%
+    st_drop_geometry() %>%
+    group_by(hex_id, month) %>%
+    summarise(
+      any_dark = any(light_bin == "Dark", na.rm = TRUE),
+      any_bad_weather = any(weather_bin == "Other", na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+
+## Attach covariates to the balanced hex-month panel
+attach_covariates <- function(hex_month_df, collisions_hex_df) {
+  road_covs <- make_road_covs(collisions_hex_df)
+  env_covs  <- make_env_covs(collisions_hex_df)
+
+  hex_month_df %>%
+    left_join(road_covs, by = c("hex_id", "month")) %>%
+    left_join(env_covs,  by = c("hex_id", "month")) %>%
+    mutate(
+      road_cat = replace_na(as.character(road_cat), "standard"),
+      road_cat = factor(road_cat, levels = c("standard", "divided", "complex", "other")),
+      any_dark = replace_na(any_dark, FALSE),
+      any_bad_weather = replace_na(any_bad_weather, FALSE)
+    )
+}
+
+```
+
+### 3.1 2023 Analysis
+
+```{r}
+## ---- models-2023 ----
+
+df_2023 <- attach_covariates(hex_month_2023, collisions_hex_2023) %>%
+  mutate(month_fe = factor(month))
+
+nb_base_2023 <- glm.nb(
+  crash_count ~ month_fe + offset(log_days),
+  data = df_2023
+)
+summary(nb_base_2023)
+
+nb_road_2023 <- glm.nb(
+  crash_count ~ month_fe + road_cat + offset(log_days),
+  data = df_2023
+)
+summary(nb_road_2023)
+
+nb_full_2023 <- glm.nb(
+  crash_count ~ month_fe + road_cat + any_dark + any_bad_weather + offset(log_days),
+  data = df_2023
+)
+
+summary(nb_full_2023)
+AIC(nb_base_2023, nb_road_2023, nb_full_2023)
+
+```
+
+### 3.2 Multi-Year Models
+```{r}
+## ---- models-multi ----
+
+df_multi <- attach_covariates(hex_month_multi, collisions_hex_multi) %>%
+  mutate(
+    month_of_year = factor(month(month), levels = 1:12, labels = month.abb),
+    year_fe = factor(year(month))
+  )
+
+nb_base_multi <- glm.nb(
+  crash_count ~ month_of_year + year_fe + offset(log_days),
+  data = df_multi
+)
+summary(nb_base_multi)
+
+nb_road_multi <- glm.nb(
+  crash_count ~ month_of_year + year_fe + road_cat + offset(log_days),
+  data = df_multi
+)
+summary(nb_road_multi)
+
+nb_full_multi <- glm.nb(
+  crash_count ~ month_of_year + year_fe + road_cat + any_dark + any_bad_weather + offset(log_days),
+  data = df_multi
+)
+
+summary(nb_full_multi)
+AIC(nb_base_multi, nb_road_multi, nb_full_multi)
+
+```
+
+
+### 3.3 Side by Side comparison
+```{r}
+## ---- irr-extraction-and-filtering ----
+
+irr <- function(model) {
+  coefs <- coef(summary(model))
+  tibble(
+    term = rownames(coefs),
+    estimate = coefs[, "Estimate"],
+    se = coefs[, "Std. Error"],
+    irr = exp(estimate),
+    irr_low = exp(estimate - 1.96 * se),
+    irr_high = exp(estimate + 1.96 * se),
+    p = coefs[, "Pr(>|z|)"]
+  )
+}
+
+keep_terms <- c(
+  "road_catdivided",
+  "road_catcomplex",
+  "any_dark",
+  "any_bad_weather"
+)
+
+irr_2023 <- irr(nb_full_2023) %>%
+  filter(term %in% keep_terms) %>%
+  mutate(dataset = "2023")
+
+irr_multi <- irr(nb_full_multi) %>%
+  filter(term %in% keep_terms) %>%
+  mutate(dataset = "2020–2024")
+
+print(irr_2023)
+print(irr_multi)
+```
+
+## 4. Visualizations
+```{r, fig.width=10, fig.height=8}
+
+## ---- eda-time-series-prep ----
+
+plot_df <- collisions_york_multi_sf %>%
+  mutate(
+    month = floor_date(date, "month"),
+    light_simple = if_else(light_bin == "Daylight", "Daylight", "Dark"),
+    road_simple = if_else(road_cat == "standard", "Standard", "Other")
+  ) %>%
+  st_drop_geometry()
+
+p1 <- ggplot(plot_df, aes(x = month)) +
+  geom_bar(width = 25, fill = "grey60") +
+  scale_x_date(
+    date_breaks = "1 year",
+    labels = NULL
+  ) +
+  labs(
+    title = "Total collisions by month",
+    y = "Number of collisions",
+    x = NULL
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+
+p2 <- ggplot(plot_df, aes(x = month, fill = light_simple)) +
+  geom_bar(width = 25) +
+  scale_fill_manual(
+    values = c("Daylight" = "#FDB863", "Dark" = "#5E3C99"),
+    name = "Lighting"
+  ) +
+  scale_x_date(
+    date_breaks = "1 year",
+    labels = NULL
+  ) +
+  labs(
+    title = "Collisions by lighting condition",
+    y = "Number of collisions",
+    x = NULL
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    legend.position = "bottom"
+  )
+
+p3 <- ggplot(plot_df, aes(x = month, fill = road_simple)) +
+  geom_bar(width = 25) +
+  scale_fill_manual(
+    values = c("Standard" = "#4DAF4A", "Other" = "#E41A1C"),
+    name = "Road type"
+  ) +
+  scale_x_date(
+    date_breaks = "1 year",
+    date_labels = "%Y"
+  ) +
+  labs(
+    title = "Collisions by roadway type",
+    y = "Number of collisions",
+    x = "Year"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "bottom"
+  )
+
+final_fig <- (p1 / p2 / p3) +
+  plot_annotation(
+    title = "Monthly road collisions in York (2020–2024)",
+    theme = theme(
+      plot.title = element_text(hjust = 0.5)
+    )
+  )
+
+ggsave(
+  filename = here::here("Term Project", "Figures", "monthly_collisions_york_2020_2024.png"),
+  plot = final_fig,
+  width = 10,
+  height = 8,
+  dpi = 300
+)
+```
+------------------------------------------------------------------------
+
+## GitHub Link
+
+-   Repo: <https://github.com/brynnwoolley/STATS-506#>
+
+------------------------------------------------------------------------
